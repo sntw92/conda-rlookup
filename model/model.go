@@ -8,6 +8,9 @@ type CondaChannelFileSource interface {
 	GetFileReadCloser(string) (io.ReadCloser, error)
 }
 
+// CondaServer stores configuration information about a single conda server.
+// A conda-server is a collection of channels under a single directory (local)
+// or accessible under a base url (remote).
 type CondaServer struct {
 	Name string `json:"name"`
 

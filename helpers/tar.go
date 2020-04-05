@@ -5,7 +5,6 @@ import (
 	"compress/bzip2"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -18,6 +17,8 @@ import (
 // If there are no errors, tarReader is guaranteed to be read till EOF.
 // In case of errors, the state of destDir is unknown.
 func TarBz2ExtractFilesAndGetSha256sum(tarReader io.Reader, destDir string, allowedFiles []string) (string, error) {
+	logger := GetAppLogger()
+
 	fileIsAllowed := make(map[string]bool)
 	for _, flname := range allowedFiles {
 		fileIsAllowed[filepath.Join(destDir, flname)] = true
@@ -36,7 +37,7 @@ func TarBz2ExtractFilesAndGetSha256sum(tarReader io.Reader, destDir string, allo
 		}
 
 		if err != nil {
-			return "", fmt.Errorf("failed reading archive: %s", err)
+			return "", logger.ErrorPrintf("failed reading archive: %s", err)
 		}
 
 		// if the header is nil, just skip it (not sure how this happens)
@@ -49,7 +50,7 @@ func TarBz2ExtractFilesAndGetSha256sum(tarReader io.Reader, destDir string, allo
 		if !fileIsAllowed[target] {
 			continue
 		}
-		fmt.Fprintf(os.Stderr, "[DEBUG] Extracting %s\n", target)
+		logger.Printf("[DEBUG] Extracting file %s\n", target)
 
 		// the following switch could also be done using fi.Mode(), not sure if there
 		// a benefit of using one vs. the other.
@@ -60,18 +61,18 @@ func TarBz2ExtractFilesAndGetSha256sum(tarReader io.Reader, destDir string, allo
 			parentDir := filepath.Dir(target)
 			if _, err := os.Stat(parentDir); err != nil {
 				if err := os.MkdirAll(parentDir, 0755); err != nil {
-					return "", fmt.Errorf("could not create dir %s: %s", parentDir, err.Error())
+					return "", logger.ErrorPrintf("could not create dir %s: %s", parentDir, err.Error())
 				}
 			}
 
 			f, err := os.OpenFile(target, os.O_CREATE|os.O_RDWR, os.FileMode(header.Mode))
 			if err != nil {
-				return "", fmt.Errorf("could not create file %s: %s", target, err.Error())
+				return "", logger.ErrorPrintf("could not create file %s: %s", target, err.Error())
 			}
 
 			// copy over contents
 			if _, err := io.Copy(f, tr); err != nil {
-				return "", fmt.Errorf("could not write to file %s: %s", target, err.Error())
+				return "", logger.ErrorPrintf("could not write to file %s: %s", target, err.Error())
 			}
 
 			// manually close here after each file operation; defering would cause each file close

@@ -1,37 +1,36 @@
 package main
 
 import (
+	"conda-rlookup/config"
 	"conda-rlookup/helpers"
-	"fmt"
 	"os"
 )
 
 func main() {
+	helpers.InitAppLogger()
+	logger := helpers.GetAppLogger()
 
-	tarFlname := "testfl.tar.bz2"
-	expectedSha256sum := "4fb591cefb5d624eac7245e0426c894734da27ebaca5d58a69ebc54bedc66512"
-	allowedFiles := []string{
-		"info/about.json",
-		"info/index.json",
-		"info/files",
-		"info/paths.json",
+	appCfg := config.GetAppConfig()
+
+	logger.Printf("[INFO] Ensuring working directory: %s\n", appCfg.Server.Workdir)
+	os.MkdirAll(appCfg.Server.Workdir, 0755)
+
+	localSrc := helpers.LocalFileSource{
+		TempDir:              "/tmp",
+		RepodataLockFilename: "",
+		SourceDir:            appCfg.Server.Path,
 	}
 
-	f, err := os.OpenFile(tarFlname, os.O_RDONLY, 0640)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "could not open tarfile %s: %s\n", tarFlname, err.Error())
-		os.Exit(1)
-	}
-
-	s, err := helpers.TarBz2ExtractFilesAndGetSha256sum(f, "well/now", allowedFiles)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "could not extract file %s: %s\n", tarFlname, err.Error())
-		os.Exit(2)
-	}
-	if s == expectedSha256sum {
-		fmt.Printf("[OK] Sha's match: %s\n", s)
-	} else {
-		fmt.Printf("[ERROR] Sha mismatch: actual %s vs expected %s\n", s, expectedSha256sum)
-		os.Exit(3)
+	for _, ch := range appCfg.Server.Channels {
+		logger.Printf("[INFO] Started Processing conda-channel: %s", ch.RelativeLocation)
+		for _, subdir := range ch.Subdirs {
+			logger.Printf("[INFO] Started Processing subdirectory: %s", subdir.RelativeLocation)
+			err := subdir.Index(appCfg.Server.Workdir, "conda-master", &localSrc)
+			if err != nil {
+				logger.Printf("[ERROR] In subdirectory %s: %s", subdir.RelativeLocation, err.Error())
+			}
+			logger.Printf("[INFO] Finished Processing subdirectory: %s", subdir.RelativeLocation)
+		}
+		logger.Printf("[INFO] Finished Processing conda-channel: %s", ch.RelativeLocation)
 	}
 }
