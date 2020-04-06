@@ -1,44 +1,71 @@
 package config
 
 import (
-	"conda-rlookup/model"
+	"conda-rlookup/domain"
+	"conda-rlookup/utils"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/imdario/mergo"
 )
 
+// Version details
+var (
+	Version      = "No Version Provided"
+	GitCommitSha = "Unknown"
+
+	BuildHost = "Unknown"
+	BuildTime = "Unknown"
+	BuildUser = "Unknown"
+)
+
+func GetVersion() *utils.VersionDetails {
+	return &utils.VersionDetails{
+		Version:      Version,
+		GitCommitSha: GitCommitSha,
+
+		BuildHost: BuildHost,
+		BuildTime: BuildTime,
+		BuildUser: BuildUser,
+	}
+}
+
 type AppConfig struct {
-	Server model.CondaServer `json:"server"`
+	Server domain.CondaServer `json:"server"`
+	Kafka  KafkaWriterConfig  `json:"kafka"`
+	Debug  string             `json:"debug"`
+}
+
+func SetDebugMode(val bool) {
+	appCfg.Debug = strconv.FormatBool(val)
+}
+
+func IsModeDebug() bool {
+	return strings.ToLower(appCfg.Debug) == "true"
 }
 
 var appCfg = AppConfig{
-	Server: model.CondaServer{
-		Name: "conda-naster",
+	Debug: "false",
+	Server: domain.CondaServer{
+		Name: "conda-master",
 		Url:  "",
 		Path: "conda-forge",
 
-		Workdir: "workdir",
-		Channels: []model.Channel{
-			{
-				Name:             "base-ng",
-				RelativeLocation: "base-ng",
-				Subdirs: []model.Subdir{
-					{
-						Name:             "linux-64",
-						RelativeLocation: "base-ng/linux-64",
-					},
-				},
-			},
-		},
+		Workdir:  "workdir",
+		Channels: map[string]domain.Channel{},
 	},
+	Kafka: KafkaWriterConfig{},
 }
 
-func SetAppConfig(cfg *AppConfig) {
-	mergo.Merge(cfg, appCfg)
+func SetAppConfig(cfg *AppConfig) error {
+	err := mergo.Merge(cfg, appCfg)
 	appCfg = *cfg
+
+	return err
 }
 
 func GetAppConfig() AppConfig {
@@ -64,9 +91,7 @@ func ReadConfigFromFile(filename string) error {
 	}
 
 	// Merge configuration
-	SetAppConfig(&cfgData)
-
-	return nil
+	return SetAppConfig(&cfgData)
 }
 
 // DumpConfigToFile writes application config data to a file as prettified JSON.

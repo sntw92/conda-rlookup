@@ -77,6 +77,7 @@ func (l *LocalFileSource) GetFileReadCloser(relativeFilepath string) (io.ReadClo
 				return nil, logger.ErrorPrintf("could not acquire lock on lockfile %s for reading %s",
 					lockFilename, relativeFilepath)
 			}
+			//nolint:errcheck
 			defer filelock.Unlock()
 			logger.Printf("[DEBUG] Acquired lock on file: %s", lockFilename)
 		}
