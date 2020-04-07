@@ -28,6 +28,8 @@ func main() {
 	configFile := flag.String("config", "", "Config file in JSON format")
 	debug := flag.Bool("debug", false, "Turn on debugging (overrides config file)")
 	dumpConfig := flag.Bool("dump-config", false, "Dump all configuration and exit. '--config' supplied config is combined as well.")
+	skipKafka := flag.Bool("skip-kafka", false, "Only index repodata and skip pushing to kafka")
+	skipRepodata := flag.Bool("skip-repodata", false, "Only try pushing to kafka and skip indexing repodata")
 
 	flag.Parse()
 
@@ -75,10 +77,14 @@ func main() {
 		os.Exit(ERR_WORKDIR_CREATE)
 	}
 
-	logger.Printf("[INFO] Intitiating Kafka Writer\n")
-	if err = indexer.InitKafkaWriter(&appCfg.Kafka); err != nil {
-		logger.Printf("Error intitializing kafka writer: %s", err.Error())
-		os.Exit(ERR_KAFKA_INIT)
+	if *skipKafka {
+		logger.Printf("[INFO] Skipping kafka initialization because skip-kafka option is set")
+	} else {
+		logger.Printf("[INFO] Intitiating Kafka Writer\n")
+		if err = indexer.InitKafkaWriter(&appCfg.Kafka); err != nil {
+			logger.Printf("Error intitializing kafka writer: %s", err.Error())
+			os.Exit(ERR_KAFKA_INIT)
+		}
 	}
 
 	localSrc := helpers.LocalFileSource{
@@ -91,14 +97,24 @@ func main() {
 		logger.Printf("[INFO] Started Processing conda-channel: %s", ch.RelativeLocation)
 		for _, subdir := range ch.Subdirs {
 			logger.Printf("[INFO] Started Processing subdirectory: %s", subdir.RelativeLocation)
-			err := indexer.IndexSubdir(subdir, appCfg.Server.Workdir, "conda-master", &localSrc)
-			if err != nil {
-				logger.Printf("[ERROR] In indexing subdirectory %s: %s", subdir.RelativeLocation, err.Error())
+			if *skipRepodata {
+				logger.Printf("[INFO] Skipping repodata indexing for subdirectory %s because skip-repodata option is set", subdir.RelativeLocation)
+			} else {
+				logger.Printf("[INFO] Started Indexing for subdirectory: %s", subdir.RelativeLocation)
+				err := indexer.IndexSubdir(subdir, appCfg.Server.Workdir, "conda-master", &localSrc)
+				if err != nil {
+					logger.Printf("[ERROR] In indexing subdirectory %s: %s", subdir.RelativeLocation, err.Error())
+				}
 			}
-			if err = indexer.SubdirFlushToKafka(subdir, appCfg.Server.Workdir); err != nil {
-				logger.Printf("[ERROR] In pushing stats to kafka for subdir %s: %s", subdir.RelativeLocation, err.Error())
+			if *skipKafka {
+				logger.Printf("[INFO] Skipping pushing to kafka for subdirectory %s because skip-kafka option is set", subdir.RelativeLocation)
+			} else {
+				logger.Printf("[INFO] Started pushing to kafka for subdirectory: %s", subdir.RelativeLocation)
+				if err = indexer.SubdirFlushToKafka(subdir, appCfg.Server.Workdir); err != nil {
+					logger.Printf("[ERROR] In pushing stats to kafka for subdir %s: %s", subdir.RelativeLocation, err.Error())
+				}
+				logger.Printf("[INFO] Finished Processing subdirectory: %s", subdir.RelativeLocation)
 			}
-			logger.Printf("[INFO] Finished Processing subdirectory: %s", subdir.RelativeLocation)
 		}
 		logger.Printf("[INFO] Finished Processing conda-channel: %s", ch.RelativeLocation)
 	}

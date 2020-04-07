@@ -122,10 +122,6 @@ func IndexSubdir(s domain.Subdir, prefixDir string, svrName string, src domain.C
 				log.Printf("[ERROR] Could not fetch and extract metadata for %s: %s", name, err.Error())
 				continue
 			}
-			//TODO: write to kafka history file to prevent re-fetching and
-			// if err = writeJsonFileToKafka(filepath.Join(workDir, s.RelativeLocation, "metadata.json")) {
-			// 	log.Printf("[ERROR] Could not flush document to Kafka")
-			// }
 			curKafkadocs.Docs[id] = domain.KafkadocEntry{
 				Path:   filepath.Join(name, "metadata.json"),
 				Sha256: metadataSha256,
@@ -181,7 +177,6 @@ func IndexSubdir(s domain.Subdir, prefixDir string, svrName string, src domain.C
 	return nil
 }
 
-//TODO: Add support for merging custom map[string]interface{}
 func extractPackageAndGenerateMetadataDocument(r io.Reader, prefixDir string, id string,
 	expectedSha256sum string, repodata domain.CondaPackage, extraData map[string]interface{}) (string, error) {
 	logger := helpers.GetAppLogger()
@@ -219,13 +214,13 @@ func extractPackageAndGenerateMetadataDocument(r io.Reader, prefixDir string, id
 
 	if filesErr != nil {
 		if pathsErr == nil {
-			var lines []string
-			for _, v := range pathsJson["path"].([]map[string]string) {
-				lines = append(lines, v["_path"])
+			if pathsData, ok := pathsJson["paths"]; ok {
+				if pathsArr, ok := pathsData.([]interface{}); ok {
+					filesJson = make(map[string]interface{})
+					filesJson["files"] = arrayOfObjectsToArrayOfStrings(pathsArr, "_path")
+					filesErr = nil
+				}
 			}
-			filesJson = make(map[string]interface{})
-			filesJson["files"] = lines
-			filesErr = nil
 		} else {
 			return "", logger.ErrorPrintf("could not parse both of info/files and info/paths.json")
 		}
@@ -233,6 +228,13 @@ func extractPackageAndGenerateMetadataDocument(r io.Reader, prefixDir string, id
 
 	aboutJsonFilename := filepath.Join(prefixDir, "info/about.json")
 	aboutJson, aboutErr := readJsonFromFile(aboutJsonFilename)
+
+	// Convert root_pkgs to an array of strings
+	if aboutJsonRootPkgs, ok := aboutJson["root_pkgs"]; ok {
+		if aboutJsonRootPkgsArr, ok := aboutJsonRootPkgs.([]interface{}); ok {
+			aboutJson["root_pkgs"] = arrayOfObjectsToArrayOfStrings(aboutJsonRootPkgsArr, "dist_name")
+		}
+	}
 
 	if pathsErr == nil {
 		res["paths"] = pathsJson["paths"]
@@ -261,4 +263,25 @@ func extractPackageAndGenerateMetadataDocument(r io.Reader, prefixDir string, id
 	}
 
 	return hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
+// arrayOfObjectsToArrayOfStrings walks through an array of objects and
+// tries extracting field as a string in each element. If that object cannot be parsed,
+// it is ignored. The order is preserved. If field is not present in any of the elements,
+// an empty array is returned. This function never returns nil.
+func arrayOfObjectsToArrayOfStrings(arrObj []interface{}, field string) []string {
+	res := []string{}
+	for _, v := range arrObj {
+		if obj, objIsMap := v.(map[string]interface{}); objIsMap {
+			if val, fieldIsPresent := obj[field]; fieldIsPresent {
+				if s, valIsString := val.(string); valIsString {
+					res = append(res, s)
+				}
+			}
+		} else if s, objIsString := v.(string); objIsString {
+			res = append(res, s)
+		}
+	}
+
+	return res
 }

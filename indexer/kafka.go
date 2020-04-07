@@ -36,6 +36,7 @@ func InitKafkaWriter(cfg *config.KafkaWriterConfig) error {
 		kafkaWriter = kafka.NewWriter(kafka.WriterConfig{
 			Brokers:     cfg.Brokers,
 			Topic:       cfg.Topic,
+			BatchBytes:  50 * 1024 * 1024, // 50MB max message size
 			Balancer:    &kafka.LeastBytes{},
 			Dialer:      dialer,
 			Logger:      logger,
@@ -142,7 +143,6 @@ func readKafkadocs(r io.Reader) (*domain.Kafkadocs, error) {
 	return &res, nil
 }
 
-// TODO: Populate this function
 func SubdirFlushToKafka(s domain.Subdir, prefixDir string) error {
 	logger := helpers.GetAppLogger()
 
