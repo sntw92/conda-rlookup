@@ -9,18 +9,19 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
 )
 
 // TarBz2ExtractFilesAndGetChecksum reads a tar.bz2 stream and tries extracting a set of "allowed-files"
-// from the archive into destDir while also trying to calculate the Sha256sum of the stream.
-// The sha256sum is returned as a hex-encoded string, along with error, if any.
+// from the archive into destDir while also trying to calculate the checksum (sha256 or md5) of the stream.
+// The checksum is returned as a hex-encoded string, along with error, if any.
 // destDir is created if it does not already exist.
-// If there are no errors, tarReader is guaranteed to be read till EOF.
+// If there are no errors, srcReader is guaranteed to be read till EOF.
 // In case of errors, the state of destDir is unknown.
-func TarBz2ExtractFilesAndGetChecksum(tarReader io.Reader, destDir string, allowedFiles []string, checksumType string) (string, error) {
+func TarBz2ExtractFilesAndGetChecksum(srcReader io.Reader, destDir string, allowedFiles []string, checksumType string) (string, error) {
 	logger := GetAppLogger()
 
 	fileIsAllowed := make(map[string]bool)
@@ -37,8 +38,22 @@ func TarBz2ExtractFilesAndGetChecksum(tarReader io.Reader, destDir string, allow
 	default:
 		return "", fmt.Errorf("Unknown checksum type %s: must be one of {sha256, md5}", checksumType)
 	}
-	teeReader := io.TeeReader(tarReader, hasher)
 
+	// Legend:
+	//   NAME provides an io.Reader interface: (NAME)=>----
+	//   NAME provides an io.Writer interface: ----=>(NAME)
+	// Description:
+	//   The graph below shows the data flow: As we read from (tr) in the process of extracting files
+	//   the decompression happens in (bz2Decomp), the (teeReader) provides this data to (bz2Decomp)
+	//   by reading from (tarReader) and writing the same content into (hasher). (tarReader) could have
+	//   a disk-file or a network socket (underlying http, for example) as the backing source.
+	//   At the very end we must "drain" all of (tarReader) into (hasher) by pulling on (teeReader) so
+	//   that we calculate the checksum accurately.
+	// Graph:
+	//   (tarReader)=>----(teeReader)=>------(bz2Decomp)=>-----(tr)=>---
+	//                         |
+	//                         +---=>(hasher)
+	teeReader := io.TeeReader(srcReader, hasher)
 	bz2Decomp := bzip2.NewReader(teeReader)
 	tr := tar.NewReader(bz2Decomp)
 
@@ -64,10 +79,6 @@ func TarBz2ExtractFilesAndGetChecksum(tarReader io.Reader, destDir string, allow
 		}
 		logger.Printf("[DEBUG] Extracting file %s\n", target)
 
-		// the following switch could also be done using fi.Mode(), not sure if there
-		// a benefit of using one vs. the other.
-		// fi := header.FileInfo()
-
 		// check the file type
 		if header.Typeflag == tar.TypeReg {
 			parentDir := filepath.Dir(target)
@@ -92,5 +103,12 @@ func TarBz2ExtractFilesAndGetChecksum(tarReader io.Reader, destDir string, allow
 			f.Close()
 		}
 	}
+
+	// This is necessary to drain the ENTIRE tarbz2 file into the hasher
+	// so that the correct checksum is calculated
+	if _, err := io.Copy(ioutil.Discard, teeReader); err != nil {
+		return "", logger.ErrorPrintf("Unable to read file fully for hashing: %s", err.Error())
+	}
+
 	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
