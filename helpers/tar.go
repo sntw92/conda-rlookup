@@ -3,20 +3,24 @@ package helpers
 import (
 	"archive/tar"
 	"compress/bzip2"
+	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
+	"hash"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
-// TarBz2ExtractFilesAndGetSha256sum reads a tar.bz2 stream and tries extracting a set of "allowed-files"
+// TarBz2ExtractFilesAndGetChecksum reads a tar.bz2 stream and tries extracting a set of "allowed-files"
 // from the archive into destDir while also trying to calculate the Sha256sum of the stream.
 // The sha256sum is returned as a hex-encoded string, along with error, if any.
 // destDir is created if it does not already exist.
 // If there are no errors, tarReader is guaranteed to be read till EOF.
 // In case of errors, the state of destDir is unknown.
-func TarBz2ExtractFilesAndGetSha256sum(tarReader io.Reader, destDir string, allowedFiles []string) (string, error) {
+func TarBz2ExtractFilesAndGetChecksum(tarReader io.Reader, destDir string, allowedFiles []string, checksumType string) (string, error) {
 	logger := GetAppLogger()
 
 	fileIsAllowed := make(map[string]bool)
@@ -24,7 +28,15 @@ func TarBz2ExtractFilesAndGetSha256sum(tarReader io.Reader, destDir string, allo
 		fileIsAllowed[filepath.Join(destDir, flname)] = true
 	}
 
-	hasher := sha256.New()
+	var hasher hash.Hash
+	switch strings.ToLower(checksumType) {
+	case "md5", "md5sum":
+		hasher = md5.New()
+	case "sha256", "sha", "shasum", "sha256sum":
+		hasher = sha256.New()
+	default:
+		return "", fmt.Errorf("Unknown checksum type %s: must be one of {sha256, md5}", checksumType)
+	}
 	teeReader := io.TeeReader(tarReader, hasher)
 
 	bz2Decomp := bzip2.NewReader(teeReader)

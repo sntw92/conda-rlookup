@@ -82,26 +82,11 @@ func IndexSubdir(s domain.Subdir, prefixDir string, svrName string, src domain.C
 
 	// Do updates on current - historic
 	for name, pkg := range curRepodata.Packages {
-		var oldpkgSha, newpkgSha string
-		var updateRequired bool
-		var ok bool
-
-		// TODO: Add ways to handle packages that do not specify a SHA256sum?
-		if newpkgSha, ok = pkg["sha256"].(string); !ok {
-			log.Printf("[ERROR] Could not get SHA256sum for %s", name)
+		updateRequired, checksumType, newChecksum, err := updateRequiredDueToChecksumDiff(histRepodata.Packages[name], pkg)
+		if err != nil {
 			nSkipped += 1
+			logger.Printf("[ERROR] Skipping package %s: %s", name, err.Error())
 			continue
-		}
-
-		if oldpkg, ok := histRepodata.Packages[name]; ok {
-			if oldpkgSha, ok = oldpkg["sha256"].(string); !ok {
-				log.Printf("[ERROR] Could not get historical SHA256sum for %s", name)
-				updateRequired = true // Older one doesn't have sha256sum, newer one does. Got to update!
-			} else if oldpkgSha != newpkgSha {
-				updateRequired = true // The sha256sum got chaged. Package override requires update!
-			}
-		} else {
-			updateRequired = true // New package was added. Must add it in our index!
 		}
 
 		if updateRequired {
@@ -116,7 +101,7 @@ func IndexSubdir(s domain.Subdir, prefixDir string, svrName string, src domain.C
 			}
 			tarFileDir := filepath.Join(workDir, name)
 			id := filepath.Join(svrName, s.RelativeLocation, name)
-			metadataSha256, err := extractPackageAndGenerateMetadataDocument(newTarFile, tarFileDir, id, newpkgSha, pkg, s.ExtraData)
+			metadataSha256, err := extractPackageAndGenerateMetadataDocument(newTarFile, tarFileDir, id, checksumType, newChecksum, pkg, s.ExtraData)
 			newTarFile.Close()
 			if err != nil {
 				log.Printf("[ERROR] Could not fetch and extract metadata for %s: %s", name, err.Error())
@@ -177,8 +162,57 @@ func IndexSubdir(s domain.Subdir, prefixDir string, svrName string, src domain.C
 	return nil
 }
 
-func extractPackageAndGenerateMetadataDocument(r io.Reader, prefixDir string, id string,
-	expectedSha256sum string, repodata domain.CondaPackage, extraData map[string]interface{}) (string, error) {
+// updateRequiredDueToChecksumDiff compares the checksums specified in newPkg to that in oldPkg to determine
+// if an update is required. It also returns the type-of-checksum used (sha256 or md5), the checksum, and error, if any.
+// If newPkg does not specify a sha256 or md5 checksum (sha256 is first preference), an error is returned.
+// Otherwise, if oldPkg specifies a checksum, the two are compared and unless there is a match false is returned.
+// If oldPkg does not specify a checksum, then true, "sha256", and the sha256sum are returned without any error.
+func updateRequiredDueToChecksumDiff(oldPkg, newPkg domain.CondaPackage) (bool, string, string, error) {
+	logger := helpers.GetAppLogger()
+
+	// newPkg cannot be nil
+	if newPkg == nil {
+		return false, "none", "", logger.ErrorPrintf("new package is nil!")
+	}
+
+	var oldpkgSha, newpkgSha, oldpkgMd5, newpkgMd5 string
+	var oldpkgShaOk, newpkgShaOk, oldpkgMd5Ok, newpkgMd5Ok bool
+
+	newpkgSha, newpkgShaOk = newPkg["sha256"].(string)
+	newpkgMd5, newpkgMd5Ok = newPkg["md5"].(string)
+
+	if !newpkgMd5Ok && !newpkgShaOk {
+		return false, "none", "", logger.ErrorPrintf("could not get either SHA256sum or MD5sum for package")
+	}
+
+	if oldPkg == nil {
+		if newpkgShaOk {
+			return true, "sha256", newpkgSha, nil
+		}
+		return true, "md5", newpkgMd5, nil
+	}
+
+	oldpkgSha, oldpkgShaOk = oldPkg["sha256"].(string)
+	oldpkgMd5, oldpkgMd5Ok = oldPkg["md5"].(string)
+
+	if newpkgShaOk && oldpkgShaOk {
+		return (oldpkgSha != newpkgSha), "sha256", newpkgSha, nil
+	}
+
+	if newpkgMd5Ok && oldpkgMd5Ok {
+		return (oldpkgMd5 != newpkgMd5), "md5", newpkgMd5, nil
+	}
+
+	return true, "sha256", newpkgSha, nil // Older one doesn't have sha256sum, newer one does. Got to update!
+}
+
+func extractPackageAndGenerateMetadataDocument(r io.Reader,
+	prefixDir string,
+	id string,
+	checksumType string,
+	expectedChecksum string,
+	repodata domain.CondaPackage,
+	extraData map[string]interface{}) (string, error) {
 	logger := helpers.GetAppLogger()
 	allowedFiles := []string{
 		"info/about.json",
@@ -186,12 +220,13 @@ func extractPackageAndGenerateMetadataDocument(r io.Reader, prefixDir string, id
 		"info/files",
 		"info/paths.json",
 	}
-	actualSha256sum, err := helpers.TarBz2ExtractFilesAndGetSha256sum(r, prefixDir, allowedFiles)
+	actualChecksum, err := helpers.TarBz2ExtractFilesAndGetChecksum(r, prefixDir, allowedFiles, checksumType)
 	if err != nil {
 		return "", logger.ErrorPrintf("could not extract package: %s", err.Error())
 	}
-	if expectedSha256sum != "" && actualSha256sum != expectedSha256sum {
-		return "", logger.ErrorPrintf("sha256sum mismatch: actual %s vs expected %s", actualSha256sum, expectedSha256sum)
+	if expectedChecksum != "" && actualChecksum != expectedChecksum {
+		return "", logger.ErrorPrintf("Checksum mismatch: %s: actual %s vs expected %s",
+			checksumType, actualChecksum, expectedChecksum)
 	}
 
 	// Generate MetadataDocument
