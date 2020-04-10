@@ -52,8 +52,13 @@ var appCfg = AppConfig{
 	Debug: "false",
 	Server: domain.CondaServer{
 		Name: "conda-master",
-		Url:  "",
-		Path: "conda-forge",
+
+		Url: "",
+
+		Path:                             "conda-forge",
+		RepodataLockFilename:             "",
+		RepodataLockMaxWaitSeconds:       181,
+		RepodataLockRetryIntervalSeconds: 2,
 
 		Workdir:  "workdir",
 		Channels: map[string]domain.Channel{},

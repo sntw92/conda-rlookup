@@ -35,8 +35,11 @@ type CondaPackage map[string]interface{}
 type CondaServer struct {
 	Name string `json:"name"`
 
-	Url  string `json:"url"`
-	Path string `json:"path"`
+	Url                              string `json:"url"`
+	Path                             string `json:"path"`
+	RepodataLockFilename             string `json:"repodata_lock_filename"`
+	RepodataLockMaxWaitSeconds       int    `json:"repodata_lock_max_wait_seconds"`
+	RepodataLockRetryIntervalSeconds int    `json:"repodata_lock_retry_interval_seconds"`
 
 	Workdir string `json:"workdir"`
 

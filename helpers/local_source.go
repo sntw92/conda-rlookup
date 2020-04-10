@@ -13,8 +13,10 @@ import (
 )
 
 type LocalFileSource struct {
-	TempDir              string
-	RepodataLockFilename string
+	TempDir                          string
+	RepodataLockFilename             string
+	RepodataLockMaxWaitSeconds       int
+	RepodataLockRetryIntervalSeconds int
 
 	SourceDir string
 }
@@ -29,6 +31,15 @@ func (l *LocalFileSource) Init() error {
 	if err := os.MkdirAll(l.TempDir, 0755); err != nil {
 		return logger.ErrorPrintf("could not create tempdir %s: %s", l.TempDir, err.Error())
 	}
+
+	if l.RepodataLockMaxWaitSeconds < 1 {
+		l.RepodataLockMaxWaitSeconds = 10
+	}
+
+	if l.RepodataLockRetryIntervalSeconds < 1 {
+		l.RepodataLockRetryIntervalSeconds = 1
+	}
+
 	return nil
 }
 
@@ -65,9 +76,9 @@ func (l *LocalFileSource) GetFileReadCloser(relativeFilepath string) (io.ReadClo
 			filelock := flock.New(lockFilename)
 
 			logger.Printf("[DEBUG] Trying to acquire lock on file: %s", lockFilename)
-			lockCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			lockCtx, cancel := context.WithTimeout(context.Background(), time.Duration(l.RepodataLockMaxWaitSeconds)*time.Second)
 			defer cancel()
-			locked, err := filelock.TryLockContext(lockCtx, 678*time.Millisecond)
+			locked, err := filelock.TryLockContext(lockCtx, time.Duration(l.RepodataLockRetryIntervalSeconds)*time.Second)
 			if err != nil {
 				return nil, logger.ErrorPrintf("could not acquire lock on lockfile %s for reading %s: %s",
 					lockFilename, relativeFilepath, err.Error())

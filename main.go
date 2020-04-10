@@ -77,6 +77,7 @@ func main() {
 		os.Exit(ERR_WORKDIR_CREATE)
 	}
 
+	// Initilalize Kafka producer, if necesssary
 	if *skipKafka {
 		logger.Printf("[INFO] Skipping kafka initialization because skip-kafka option is set")
 	} else {
@@ -87,11 +88,24 @@ func main() {
 		}
 	}
 
+	// TODO: Finish support for HTTP sources
 	localSrc := helpers.LocalFileSource{
-		TempDir:              "/tmp",
-		RepodataLockFilename: "",
-		SourceDir:            appCfg.Server.Path,
+		TempDir:                          "/tmp",
+		RepodataLockFilename:             appCfg.Server.RepodataLockFilename,
+		RepodataLockMaxWaitSeconds:       20,
+		RepodataLockRetryIntervalSeconds: 2,
+		SourceDir:                        appCfg.Server.Path,
 	}
+
+	if appCfg.Server.RepodataLockMaxWaitSeconds > 0 {
+		localSrc.RepodataLockMaxWaitSeconds = appCfg.Server.RepodataLockMaxWaitSeconds
+	}
+
+	if appCfg.Server.RepodataLockRetryIntervalSeconds > 0 {
+		localSrc.RepodataLockRetryIntervalSeconds = appCfg.Server.RepodataLockRetryIntervalSeconds
+	}
+
+	var subdirRepodataFailed, subdirKafkaFailed []string
 
 	for _, ch := range appCfg.Server.Channels {
 		logger.Printf("[INFO] Started Processing conda-channel: %s", ch.RelativeLocation)
@@ -104,6 +118,7 @@ func main() {
 				err := indexer.IndexSubdir(subdir, appCfg.Server.Workdir, "conda-master", &localSrc)
 				if err != nil {
 					logger.Printf("[ERROR] In indexing subdirectory %s: %s", subdir.RelativeLocation, err.Error())
+					subdirRepodataFailed = append(subdirRepodataFailed, subdir.RelativeLocation)
 				}
 			}
 			if *skipKafka {
@@ -112,12 +127,26 @@ func main() {
 				logger.Printf("[INFO] Started pushing to kafka for subdirectory: %s", subdir.RelativeLocation)
 				if err = indexer.SubdirFlushToKafka(subdir, appCfg.Server.Workdir); err != nil {
 					logger.Printf("[ERROR] In pushing stats to kafka for subdir %s: %s", subdir.RelativeLocation, err.Error())
+					subdirKafkaFailed = append(subdirKafkaFailed, subdir.RelativeLocation)
 				}
 				logger.Printf("[INFO] Finished Processing subdirectory: %s", subdir.RelativeLocation)
 			}
 		}
 		logger.Printf("[INFO] Finished Processing conda-channel: %s", ch.RelativeLocation)
 	}
+
+	var retErrCode = ERR_NONE
+	if len(subdirRepodataFailed) != 0 {
+		logger.Printf("[ERROR] Repodata indexing for these subdirs failed: %v", subdirRepodataFailed)
+		retErrCode = ERR_SUBDIR_REPODATA_INDEX
+	}
+
+	if len(subdirKafkaFailed) != 0 {
+		logger.Printf("[ERROR] Kafkadoc update for these subdirs failed: %v", subdirKafkaFailed)
+		retErrCode = ERR_KAFKA_DOC_UPDATE
+	}
+
+	os.Exit(retErrCode)
 }
 
 func printVersion() {
